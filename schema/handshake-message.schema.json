@@ -1,0 +1,776 @@
+{
+  "$defs": {
+    "Argon2Params": {
+      "description": "Argon2id parameters. Memory is in KiB; `t_cost` is passes; `p_cost` is lanes.",
+      "properties": {
+        "m_cost_kib": {
+          "description": "Memory in KiB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "p_cost": {
+          "description": "Lanes (parallelism).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "t_cost": {
+          "description": "Passes over the memory.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "m_cost_kib",
+        "t_cost",
+        "p_cost"
+      ],
+      "type": "object"
+    },
+    "Device": {
+      "additionalProperties": true,
+      "description": "One per enrolled device.",
+      "properties": {
+        "attestation": {
+          "description": "Platform keystore attestation, when the platform offers one.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "device_id": {
+          "$ref": "#/$defs/Id",
+          "description": "The device's identifier, chosen by its keystore."
+        },
+        "device_pub": {
+          "description": "The device's Ed25519 public key.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "enrolled_at": {
+          "$ref": "#/$defs/Timestamp",
+          "description": "When it was enrolled."
+        },
+        "enrolled_by": {
+          "$ref": "#/$defs/EnrolledBy",
+          "description": "How it was enrolled."
+        },
+        "kem_pub": {
+          "$ref": "#/$defs/KemPublicKey",
+          "description": "The device's receiving key, used only to enrol it (§3)."
+        },
+        "name": {
+          "description": "What the person calls it.",
+          "type": "string"
+        },
+        "platform": {
+          "$ref": "#/$defs/Platform",
+          "description": "Its operating system."
+        },
+        "revoked_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When it was revoked, if it was."
+        },
+        "sig": {
+          "description": "Ed25519 signature by the ISK over the record with `sig` empty.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "v": {
+          "description": "Record format version.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "device_id",
+        "name",
+        "platform",
+        "device_pub",
+        "kem_pub",
+        "enrolled_at",
+        "enrolled_by",
+        "sig"
+      ],
+      "type": "object"
+    },
+    "EnrolledBy": {
+      "description": "How a device came to be enrolled.",
+      "oneOf": [
+        {
+          "description": "The first device: it created the identity.",
+          "properties": {
+            "kind": {
+              "const": "creator",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Another, already enrolled device vouched for it (§8 row 2).",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id",
+              "description": "That device's id."
+            },
+            "kind": {
+              "const": "device",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The recovery kit rebuilt the root key on it (§8 row 3).",
+          "properties": {
+            "kind": {
+              "const": "kit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Grant": {
+      "description": "Last message when the person said yes: the root key wrapped to the new\ndevice's receiving key, and the store head after the device was added.",
+      "properties": {
+        "envelope": {
+          "$ref": "#/$defs/KeyEnvelope",
+          "description": "The IRK, `wrapped_by: peer.<new device id>`, `purpose: irk`, signed\nby the ISK. Not stored; the new device writes its own `device` wrap."
+        },
+        "head": {
+          "$ref": "#/$defs/Head",
+          "description": "The manifest head the responder wrote. The requester refuses a store\nbehind it."
+        },
+        "v": {
+          "description": "Protocol version.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "envelope",
+        "head"
+      ],
+      "type": "object"
+    },
+    "Head": {
+      "description": "The newest manifest a device accepted: its sequence and hash, and the\npassword-stretching parameters that were in force then. Keep it; hand it\nback on the next attach to catch a rollback of the store or a lowering\nof the parameters (04-security §4: they only ever rise; D26).",
+      "properties": {
+        "hash": {
+          "description": "SHA-256 of the manifest file.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "kdf": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Argon2Params"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The Argon2id parameters the profile carried when this head was\naccepted. `None` for a head remembered by an older build, which\nthen only checks the floor."
+        },
+        "seq": {
+          "description": "The manifest's `seq`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "hash"
+      ],
+      "type": "object"
+    },
+    "Hello": {
+      "description": "First message, from the running app: which identity it holds, which of\nits devices is speaking, that device's receiving key, and a commitment\nto the nonce it will reveal later.",
+      "properties": {
+        "commit": {
+          "description": "SHA-256 over a label and the responder's nonce.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "device_id": {
+          "$ref": "#/$defs/Id",
+          "description": "The running app's device (an enrolled device of that profile)."
+        },
+        "kem_pub": {
+          "$ref": "#/$defs/KemPublicKey",
+          "description": "That device's receiving key, as its `Device` record publishes it."
+        },
+        "profile_id": {
+          "$ref": "#/$defs/Id",
+          "description": "The profile the running app holds open."
+        },
+        "v": {
+          "description": "Protocol version.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "profile_id",
+        "device_id",
+        "kem_pub",
+        "commit"
+      ],
+      "type": "object"
+    },
+    "Id": {
+      "description": "A 128-bit identifier. It is written as the usual hyphenated UUID text in\nevery encoding, so CBOR, JSON, and file names all show the same string.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "KemAlg": {
+      "description": "Which key-encapsulation scheme a receiving key uses.",
+      "oneOf": [
+        {
+          "const": "x25519",
+          "description": "X25519 alone. Not post-quantum.",
+          "type": "string"
+        },
+        {
+          "const": "x25519-mlkem768",
+          "description": "Hybrid X25519 + ML-KEM-768 (X-Wing). The default.",
+          "type": "string"
+        }
+      ]
+    },
+    "KemPublicKey": {
+      "description": "A receiving key's public half.",
+      "properties": {
+        "alg": {
+          "$ref": "#/$defs/KemAlg",
+          "description": "The scheme."
+        },
+        "bytes": {
+          "description": "The encoded public key (32 bytes for X25519, 1216 for the hybrid).",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "alg",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "KeyEnvelope": {
+      "additionalProperties": true,
+      "description": "One wrapped key (§4).",
+      "properties": {
+        "aad": {
+          "description": "Canonical CBOR of [`Aad`]. Readers recompute it from where they found\nthe envelope and refuse one that disagrees.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "alg": {
+          "$ref": "#/$defs/WrapAlg",
+          "description": "The cipher."
+        },
+        "app": {
+          "description": "The app an `app-data` or `crown-jewel` key belongs to; empty for the\nother purposes (D28). Also sealed into the associated data, so an\nenvelope cannot be re-labelled to another app.",
+          "type": "string"
+        },
+        "ciphertext": {
+          "description": "The sealed key and its tag.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "created_at": {
+          "$ref": "#/$defs/Timestamp",
+          "description": "When it was wrapped."
+        },
+        "enc": {
+          "description": "For a public-key wrap: the KEM encapsulation the recipient's\nreceiving key opens to get the sealing key. Absent on symmetric wraps.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "key_id": {
+          "$ref": "#/$defs/Id",
+          "description": "The key being wrapped."
+        },
+        "nonce": {
+          "description": "The AEAD nonce (24 random bytes).",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "purpose": {
+          "$ref": "#/$defs/Purpose",
+          "description": "What the key is for."
+        },
+        "sig": {
+          "description": "Ed25519 signature by the ISK over the record with `sig` empty.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "v": {
+          "description": "Record format version.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wrapped_by": {
+          "$ref": "#/$defs/KeyRef",
+          "description": "Who can open it."
+        }
+      },
+      "required": [
+        "v",
+        "key_id",
+        "wrapped_by",
+        "alg",
+        "aad",
+        "nonce",
+        "ciphertext",
+        "purpose",
+        "created_at",
+        "sig"
+      ],
+      "type": "object"
+    },
+    "KeyRef": {
+      "description": "Who can open an envelope: a kind and the id of that kind's holder.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id",
+          "description": "Which one."
+        },
+        "kind": {
+          "$ref": "#/$defs/KeyRefKind",
+          "description": "Which kind of key."
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    },
+    "KeyRefKind": {
+      "description": "Which kind of key can open an envelope.",
+      "oneOf": [
+        {
+          "const": "account",
+          "description": "The Account Unlock Key (password + Secret Key through OPAQUE). `id` is the profile.",
+          "type": "string"
+        },
+        {
+          "const": "device",
+          "description": "A device's keystore key. `id` is the device.",
+          "type": "string"
+        },
+        {
+          "const": "persona",
+          "description": "A Persona Key. `id` is the persona.",
+          "type": "string"
+        },
+        {
+          "const": "irk",
+          "description": "The Identity Root Key. `id` is its key id.",
+          "type": "string"
+        },
+        {
+          "const": "kit",
+          "description": "The key the recovery code rebuilds. `id` is the profile.",
+          "type": "string"
+        },
+        {
+          "const": "peer",
+          "description": "Another person's or device's receiving key. `id` is theirs.",
+          "type": "string"
+        }
+      ]
+    },
+    "Platform": {
+      "description": "The operating system family a device runs.",
+      "oneOf": [
+        {
+          "const": "macos",
+          "description": "macOS.",
+          "type": "string"
+        },
+        {
+          "const": "ios",
+          "description": "iOS and iPadOS.",
+          "type": "string"
+        },
+        {
+          "const": "android",
+          "description": "Android.",
+          "type": "string"
+        },
+        {
+          "const": "windows",
+          "description": "Windows.",
+          "type": "string"
+        },
+        {
+          "const": "linux",
+          "description": "Linux and the BSDs.",
+          "type": "string"
+        },
+        {
+          "const": "web",
+          "description": "A browser.",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Something else.",
+          "type": "string"
+        }
+      ]
+    },
+    "Purpose": {
+      "description": "What the wrapped key is for. Part of the associated data, so an envelope\ncannot be passed off as another purpose.",
+      "oneOf": [
+        {
+          "const": "irk",
+          "description": "The Identity Root Key.",
+          "type": "string"
+        },
+        {
+          "const": "persona",
+          "description": "A Persona Key.",
+          "type": "string"
+        },
+        {
+          "const": "app-data",
+          "description": "An App Data Key.",
+          "type": "string"
+        },
+        {
+          "const": "crown-jewel",
+          "description": "A Crown-Jewel Key.",
+          "type": "string"
+        },
+        {
+          "const": "share",
+          "description": "A key shared with a peer.",
+          "type": "string"
+        }
+      ]
+    },
+    "Refusal": {
+      "description": "Last message when something stopped the handshake.",
+      "properties": {
+        "detail": {
+          "description": "A sentence for the person, in plain words.",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/RefusalReason",
+          "description": "Why."
+        },
+        "v": {
+          "description": "Protocol version.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "reason",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "RefusalReason": {
+      "description": "Why a side stopped.",
+      "oneOf": [
+        {
+          "const": "untrusted",
+          "description": "The peer could not be shown to be an ecosystem app.",
+          "type": "string"
+        },
+        {
+          "const": "declined",
+          "description": "The person said no.",
+          "type": "string"
+        },
+        {
+          "const": "replayed",
+          "description": "The request's nonce was seen before.",
+          "type": "string"
+        },
+        {
+          "const": "already-enrolled",
+          "description": "The device is already enrolled.",
+          "type": "string"
+        },
+        {
+          "const": "bad-request",
+          "description": "The message was malformed, out of order, or failed a check.",
+          "type": "string"
+        }
+      ]
+    },
+    "Request": {
+      "description": "Second message, from the new app: the device it wants enrolled, a fresh\nnonce, and proof that it holds that device's signing key.",
+      "properties": {
+        "device": {
+          "$ref": "#/$defs/Device",
+          "description": "The new device's record as the requester proposes it: `enrolled_by`\nnames the responder's device, `sig` is empty. The responder sets\n`enrolled_at` and signs."
+        },
+        "nonce": {
+          "description": "32 random bytes. Seen once; a repeat is refused.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "pop": {
+          "description": "Ed25519 signature by the device key over the request transcript\n(see [`proof_of_possession_message`]).",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "v": {
+          "description": "Protocol version.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "device",
+        "nonce",
+        "pop"
+      ],
+      "type": "object"
+    },
+    "Reveal": {
+      "description": "Third message, from the running app: the nonce it committed to.",
+      "properties": {
+        "nonce": {
+          "description": "The responder's nonce.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "v": {
+          "description": "Protocol version.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "nonce"
+      ],
+      "type": "object"
+    },
+    "Timestamp": {
+      "description": "Seconds since the Unix epoch, UTC.",
+      "format": "int64",
+      "type": "integer"
+    },
+    "WrapAlg": {
+      "description": "The cipher that sealed an envelope.",
+      "oneOf": [
+        {
+          "const": "xchacha20poly1305",
+          "description": "Symmetric wrap with a 192-bit random nonce.",
+          "type": "string"
+        },
+        {
+          "const": "hpke-x25519-mlkem768",
+          "description": "Public-key wrap to a peer through HPKE (RFC 9180) with hybrid\nX25519 + ML-KEM-768. Reserved: this crate does not yet write it.",
+          "type": "string"
+        },
+        {
+          "const": "x-wing-xchacha20poly1305",
+          "description": "Public-key wrap to a device's receiving key: X-Wing (hybrid\nX25519 + ML-KEM-768) encapsulates a shared secret, HKDF-SHA-512 turns\nit into a key, and that key seals the payload with XChaCha20-Poly1305.\nThe encapsulation is in `enc`. This is what the local handshake\nwrites (spec §6 step 3). It is not RFC 9180 HPKE, so it has its own\nname.",
+          "type": "string"
+        },
+        {
+          "const": "x25519-xchacha20poly1305",
+          "description": "The same construction over plain X25519, for a build without ML-KEM.\nNot post-quantum.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Any message on the channel.",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "description": "Responder → requester, first.",
+      "properties": {
+        "hello": {
+          "$ref": "#/$defs/Hello"
+        }
+      },
+      "required": [
+        "hello"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "Requester → responder.",
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/Request"
+        }
+      },
+      "required": [
+        "request"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "Responder → requester.",
+      "properties": {
+        "reveal": {
+          "$ref": "#/$defs/Reveal"
+        }
+      },
+      "required": [
+        "reveal"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "Responder → requester, last, on success.",
+      "properties": {
+        "granted": {
+          "$ref": "#/$defs/Grant"
+        }
+      },
+      "required": [
+        "granted"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "Either side, last, on failure.",
+      "properties": {
+        "refused": {
+          "$ref": "#/$defs/Refusal"
+        }
+      },
+      "required": [
+        "refused"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "Message"
+}

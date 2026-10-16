@@ -1,0 +1,153 @@
+{
+  "$defs": {
+    "Id": {
+      "description": "A 128-bit identifier. It is written as the usual hyphenated UUID text in\nevery encoding, so CBOR, JSON, and file names all show the same string.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ManifestEntry": {
+      "description": "One line of the manifest: a file, its hash, and its record version.",
+      "properties": {
+        "hash": {
+          "description": "SHA-256 of the file's bytes.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "path": {
+          "description": "Path relative to the identity root, with `/` separators.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The record's `v`.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "hash",
+        "version"
+      ],
+      "type": "object"
+    },
+    "Timestamp": {
+      "description": "Seconds since the Unix epoch, UTC.",
+      "format": "int64",
+      "type": "integer"
+    },
+    "Tombstone": {
+      "description": "A file the store once held and has since removed (D29). The chain keeps\nsaying what was there, so a removal is a recorded step, not a gap, and\na copy of the file put back is an unlisted file and refused.",
+      "properties": {
+        "hash": {
+          "description": "SHA-256 of the file's last bytes.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "path": {
+          "description": "The path the file had, relative to the identity root.",
+          "type": "string"
+        },
+        "retired_at": {
+          "$ref": "#/$defs/Timestamp",
+          "description": "When it was removed."
+        },
+        "seq": {
+          "description": "The manifest `seq` that removed it.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "hash",
+        "seq",
+        "retired_at"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "description": "The signed, hash-chained list of every file in the store (§5). A reader\nthat remembers the newest manifest it accepted can tell a rollback.",
+  "properties": {
+    "entries": {
+      "description": "Every file, sorted by path.",
+      "items": {
+        "$ref": "#/$defs/ManifestEntry"
+      },
+      "type": "array"
+    },
+    "prev": {
+      "description": "SHA-256 of the previous manifest's bytes; empty for the first.",
+      "items": {
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "array"
+    },
+    "seq": {
+      "description": "Rises by one on every write.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "sig": {
+      "description": "Ed25519 signature by the ISK over the record with `sig` empty.",
+      "items": {
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "array"
+    },
+    "tombstones": {
+      "description": "Every file that was removed, oldest first (D29). Empty until the\nfirst removal, and then left out of the encoding.",
+      "items": {
+        "$ref": "#/$defs/Tombstone"
+      },
+      "type": "array"
+    },
+    "v": {
+      "description": "Record format version.",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "written_at": {
+      "$ref": "#/$defs/Timestamp",
+      "description": "When it was written."
+    },
+    "written_by": {
+      "$ref": "#/$defs/Id",
+      "description": "The device that wrote it."
+    }
+  },
+  "required": [
+    "v",
+    "seq",
+    "prev",
+    "entries",
+    "written_at",
+    "written_by",
+    "sig"
+  ],
+  "title": "Manifest",
+  "type": "object"
+}

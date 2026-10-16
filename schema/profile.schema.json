@@ -1,0 +1,137 @@
+{
+  "$defs": {
+    "Argon2Params": {
+      "description": "Argon2id parameters. Memory is in KiB; `t_cost` is passes; `p_cost` is lanes.",
+      "properties": {
+        "m_cost_kib": {
+          "description": "Memory in KiB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "p_cost": {
+          "description": "Lanes (parallelism).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "t_cost": {
+          "description": "Passes over the memory.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "m_cost_kib",
+        "t_cost",
+        "p_cost"
+      ],
+      "type": "object"
+    },
+    "Id": {
+      "description": "A 128-bit identifier. It is written as the usual hyphenated UUID text in\nevery encoding, so CBOR, JSON, and file names all show the same string.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "RecoveryState": {
+      "description": "Whether the person has a recovery kit, and whether it has been tried.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "No kit has been made. The only thing a manager may newly ask for (§7).",
+          "type": "string"
+        },
+        {
+          "const": "created",
+          "description": "A kit exists.",
+          "type": "string"
+        },
+        {
+          "const": "drilled",
+          "description": "The kit was used once in a drill and it opened the identity.",
+          "type": "string"
+        }
+      ]
+    },
+    "Timestamp": {
+      "description": "Seconds since the Unix epoch, UTC.",
+      "format": "int64",
+      "type": "integer"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "description": "One per person. Who manages the identity and how far recovery has got.",
+  "properties": {
+    "created_at": {
+      "$ref": "#/$defs/Timestamp",
+      "description": "When the identity was created."
+    },
+    "format_v": {
+      "description": "The store format major this profile was written under.",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "isk_pub": {
+      "description": "Public half of the Identity Signing Key, which signs every record.",
+      "items": {
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "array"
+    },
+    "kdf": {
+      "$ref": "#/$defs/Argon2Params",
+      "description": "Password-stretching parameters for the recovery kit and the account\nslot. Signed here so a relay cannot lower them (04-security §4)."
+    },
+    "manager": {
+      "description": "The app that manages this identity (for example `lockdown`), or none.\nWhile none, any app may write the profile (§2, §7).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "profile_id": {
+      "$ref": "#/$defs/Id",
+      "description": "The person's identifier. Never changes."
+    },
+    "recovery": {
+      "$ref": "#/$defs/RecoveryState",
+      "description": "Recovery kit state."
+    },
+    "sig": {
+      "description": "Ed25519 signature by the ISK over the record with `sig` empty.",
+      "items": {
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "array"
+    },
+    "v": {
+      "description": "Record format version.",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "v",
+    "profile_id",
+    "created_at",
+    "recovery",
+    "format_v",
+    "isk_pub",
+    "kdf",
+    "sig"
+  ],
+  "title": "Profile",
+  "type": "object"
+}

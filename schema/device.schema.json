@@ -1,0 +1,235 @@
+{
+  "$defs": {
+    "EnrolledBy": {
+      "description": "How a device came to be enrolled.",
+      "oneOf": [
+        {
+          "description": "The first device: it created the identity.",
+          "properties": {
+            "kind": {
+              "const": "creator",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Another, already enrolled device vouched for it (§8 row 2).",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id",
+              "description": "That device's id."
+            },
+            "kind": {
+              "const": "device",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The recovery kit rebuilt the root key on it (§8 row 3).",
+          "properties": {
+            "kind": {
+              "const": "kit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Id": {
+      "description": "A 128-bit identifier. It is written as the usual hyphenated UUID text in\nevery encoding, so CBOR, JSON, and file names all show the same string.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "KemAlg": {
+      "description": "Which key-encapsulation scheme a receiving key uses.",
+      "oneOf": [
+        {
+          "const": "x25519",
+          "description": "X25519 alone. Not post-quantum.",
+          "type": "string"
+        },
+        {
+          "const": "x25519-mlkem768",
+          "description": "Hybrid X25519 + ML-KEM-768 (X-Wing). The default.",
+          "type": "string"
+        }
+      ]
+    },
+    "KemPublicKey": {
+      "description": "A receiving key's public half.",
+      "properties": {
+        "alg": {
+          "$ref": "#/$defs/KemAlg",
+          "description": "The scheme."
+        },
+        "bytes": {
+          "description": "The encoded public key (32 bytes for X25519, 1216 for the hybrid).",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "alg",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "Platform": {
+      "description": "The operating system family a device runs.",
+      "oneOf": [
+        {
+          "const": "macos",
+          "description": "macOS.",
+          "type": "string"
+        },
+        {
+          "const": "ios",
+          "description": "iOS and iPadOS.",
+          "type": "string"
+        },
+        {
+          "const": "android",
+          "description": "Android.",
+          "type": "string"
+        },
+        {
+          "const": "windows",
+          "description": "Windows.",
+          "type": "string"
+        },
+        {
+          "const": "linux",
+          "description": "Linux and the BSDs.",
+          "type": "string"
+        },
+        {
+          "const": "web",
+          "description": "A browser.",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Something else.",
+          "type": "string"
+        }
+      ]
+    },
+    "Timestamp": {
+      "description": "Seconds since the Unix epoch, UTC.",
+      "format": "int64",
+      "type": "integer"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "description": "One per enrolled device.",
+  "properties": {
+    "attestation": {
+      "description": "Platform keystore attestation, when the platform offers one.",
+      "items": {
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "device_id": {
+      "$ref": "#/$defs/Id",
+      "description": "The device's identifier, chosen by its keystore."
+    },
+    "device_pub": {
+      "description": "The device's Ed25519 public key.",
+      "items": {
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "array"
+    },
+    "enrolled_at": {
+      "$ref": "#/$defs/Timestamp",
+      "description": "When it was enrolled."
+    },
+    "enrolled_by": {
+      "$ref": "#/$defs/EnrolledBy",
+      "description": "How it was enrolled."
+    },
+    "kem_pub": {
+      "$ref": "#/$defs/KemPublicKey",
+      "description": "The device's receiving key, used only to enrol it (§3)."
+    },
+    "name": {
+      "description": "What the person calls it.",
+      "type": "string"
+    },
+    "platform": {
+      "$ref": "#/$defs/Platform",
+      "description": "Its operating system."
+    },
+    "revoked_at": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Timestamp"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "When it was revoked, if it was."
+    },
+    "sig": {
+      "description": "Ed25519 signature by the ISK over the record with `sig` empty.",
+      "items": {
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "array"
+    },
+    "v": {
+      "description": "Record format version.",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "v",
+    "device_id",
+    "name",
+    "platform",
+    "device_pub",
+    "kem_pub",
+    "enrolled_at",
+    "enrolled_by",
+    "sig"
+  ],
+  "title": "Device",
+  "type": "object"
+}

@@ -1,0 +1,191 @@
+{
+  "$defs": {
+    "Id": {
+      "description": "A 128-bit identifier. It is written as the usual hyphenated UUID text in\nevery encoding, so CBOR, JSON, and file names all show the same string.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "KemAlg": {
+      "description": "Which key-encapsulation scheme a receiving key uses.",
+      "oneOf": [
+        {
+          "const": "x25519",
+          "description": "X25519 alone. Not post-quantum.",
+          "type": "string"
+        },
+        {
+          "const": "x25519-mlkem768",
+          "description": "Hybrid X25519 + ML-KEM-768 (X-Wing). The default.",
+          "type": "string"
+        }
+      ]
+    },
+    "KemPublicKey": {
+      "description": "A receiving key's public half.",
+      "properties": {
+        "alg": {
+          "$ref": "#/$defs/KemAlg",
+          "description": "The scheme."
+        },
+        "bytes": {
+          "description": "The encoded public key (32 bytes for X25519, 1216 for the hybrid).",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "alg",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "KeyRef": {
+      "description": "Who can open an envelope: a kind and the id of that kind's holder.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id",
+          "description": "Which one."
+        },
+        "kind": {
+          "$ref": "#/$defs/KeyRefKind",
+          "description": "Which kind of key."
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    },
+    "KeyRefKind": {
+      "description": "Which kind of key can open an envelope.",
+      "oneOf": [
+        {
+          "const": "account",
+          "description": "The Account Unlock Key (password + Secret Key through OPAQUE). `id` is the profile.",
+          "type": "string"
+        },
+        {
+          "const": "device",
+          "description": "A device's keystore key. `id` is the device.",
+          "type": "string"
+        },
+        {
+          "const": "persona",
+          "description": "A Persona Key. `id` is the persona.",
+          "type": "string"
+        },
+        {
+          "const": "irk",
+          "description": "The Identity Root Key. `id` is its key id.",
+          "type": "string"
+        },
+        {
+          "const": "kit",
+          "description": "The key the recovery code rebuilds. `id` is the profile.",
+          "type": "string"
+        },
+        {
+          "const": "peer",
+          "description": "Another person's or device's receiving key. `id` is theirs.",
+          "type": "string"
+        }
+      ]
+    },
+    "PersonaKind": {
+      "description": "What a persona is for.",
+      "oneOf": [
+        {
+          "const": "personal",
+          "description": "Home life. Every identity starts with one of these.",
+          "type": "string"
+        },
+        {
+          "const": "work",
+          "description": "Employment.",
+          "type": "string"
+        },
+        {
+          "const": "business",
+          "description": "A business the person runs.",
+          "type": "string"
+        },
+        {
+          "const": "custom",
+          "description": "Anything else; `label` says what.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "description": "One per wall (D13). An app holding one persona's key cannot read another's data.",
+  "properties": {
+    "color": {
+      "description": "A display colour, as the app likes to write it.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_by_app": {
+      "description": "The app that created it.",
+      "type": "string"
+    },
+    "identity_key_ref": {
+      "$ref": "#/$defs/KeyRef",
+      "description": "The identity key that wraps this persona's key (the IRK's key id)."
+    },
+    "kem_pub": {
+      "$ref": "#/$defs/KemPublicKey",
+      "description": "Public half of the persona's receiving key for shares. The private\nhalf is derived from the Persona Key, so only a holder of that key\ncan open a share sent to this persona."
+    },
+    "kind": {
+      "$ref": "#/$defs/PersonaKind",
+      "description": "What it is for."
+    },
+    "label": {
+      "description": "What the person calls it.",
+      "type": "string"
+    },
+    "persona_id": {
+      "$ref": "#/$defs/Id",
+      "description": "The persona's identifier."
+    },
+    "sig": {
+      "description": "Ed25519 signature by the ISK over the record with `sig` empty.",
+      "items": {
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "array"
+    },
+    "v": {
+      "description": "Record format version.",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "v",
+    "persona_id",
+    "label",
+    "kind",
+    "created_by_app",
+    "identity_key_ref",
+    "kem_pub",
+    "sig"
+  ],
+  "title": "Persona",
+  "type": "object"
+}

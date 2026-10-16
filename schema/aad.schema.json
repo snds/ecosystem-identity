@@ -1,0 +1,85 @@
+{
+  "$defs": {
+    "Id": {
+      "description": "A 128-bit identifier. It is written as the usual hyphenated UUID text in\nevery encoding, so CBOR, JSON, and file names all show the same string.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "Purpose": {
+      "description": "What the wrapped key is for. Part of the associated data, so an envelope\ncannot be passed off as another purpose.",
+      "oneOf": [
+        {
+          "const": "irk",
+          "description": "The Identity Root Key.",
+          "type": "string"
+        },
+        {
+          "const": "persona",
+          "description": "A Persona Key.",
+          "type": "string"
+        },
+        {
+          "const": "app-data",
+          "description": "An App Data Key.",
+          "type": "string"
+        },
+        {
+          "const": "crown-jewel",
+          "description": "A Crown-Jewel Key.",
+          "type": "string"
+        },
+        {
+          "const": "share",
+          "description": "A key shared with a peer.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What an envelope's associated data says: where the envelope belongs.\nCanonical CBOR of this is the AEAD's associated data (§4).",
+  "properties": {
+    "app": {
+      "description": "The app an `app-data` or `crown-jewel` key belongs to (D28). Empty\nfor the other purposes, and then left out of the encoding, so\nenvelopes written before this field opens unchanged.",
+      "type": "string"
+    },
+    "key_id": {
+      "$ref": "#/$defs/Id",
+      "description": "The key being wrapped."
+    },
+    "persona_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Id"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The persona the key belongs to, or none for identity-wide keys."
+    },
+    "profile_id": {
+      "$ref": "#/$defs/Id",
+      "description": "The profile the key belongs to."
+    },
+    "purpose": {
+      "$ref": "#/$defs/Purpose",
+      "description": "What the key is for."
+    },
+    "v": {
+      "description": "The envelope format version.",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "profile_id",
+    "key_id",
+    "purpose",
+    "v"
+  ],
+  "title": "Aad",
+  "type": "object"
+}

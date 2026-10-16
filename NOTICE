@@ -1,0 +1,6 @@
+ecosystem-identity
+Copyright 2026 Sean Sands
+
+Extracted on 2026-10-16 from snds/Mailbird (crates/identity, Apache-2.0),
+where it was first built per Lockdown decision D12. ADR-0049 and ADR-0050
+from that repository are carried here as decisions 0001 and 0002.

@@ -1,0 +1,70 @@
+{
+  "$defs": {
+    "Argon2Params": {
+      "description": "Argon2id parameters. Memory is in KiB; `t_cost` is passes; `p_cost` is lanes.",
+      "properties": {
+        "m_cost_kib": {
+          "description": "Memory in KiB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "p_cost": {
+          "description": "Lanes (parallelism).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "t_cost": {
+          "description": "Passes over the memory.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "m_cost_kib",
+        "t_cost",
+        "p_cost"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The newest manifest a device accepted: its sequence and hash, and the\npassword-stretching parameters that were in force then. Keep it; hand it\nback on the next attach to catch a rollback of the store or a lowering\nof the parameters (04-security §4: they only ever rise; D26).",
+  "properties": {
+    "hash": {
+      "description": "SHA-256 of the manifest file.",
+      "items": {
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "array"
+    },
+    "kdf": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Argon2Params"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The Argon2id parameters the profile carried when this head was\naccepted. `None` for a head remembered by an older build, which\nthen only checks the floor."
+    },
+    "seq": {
+      "description": "The manifest's `seq`.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "seq",
+    "hash"
+  ],
+  "title": "Head",
+  "type": "object"
+}

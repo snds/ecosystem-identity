@@ -1,0 +1,64 @@
+{
+  "$defs": {
+    "Id": {
+      "description": "A 128-bit identifier. It is written as the usual hyphenated UUID text in\nevery encoding, so CBOR, JSON, and file names all show the same string.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "Timestamp": {
+      "description": "Seconds since the Unix epoch, UTC.",
+      "format": "int64",
+      "type": "integer"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "description": "One tolerated-tier grant: the person saw a disclosure and said yes.",
+  "properties": {
+    "bridge": {
+      "description": "The bridge or plugin the grant is for.",
+      "type": "string"
+    },
+    "device_id": {
+      "$ref": "#/$defs/Id",
+      "description": "On which device."
+    },
+    "disclosure_version": {
+      "description": "The version of the disclosure text that was shown.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "granted_at": {
+      "$ref": "#/$defs/Timestamp",
+      "description": "When the person agreed."
+    },
+    "sig": {
+      "description": "Ed25519 signature by the ISK over the record with `sig` empty.",
+      "items": {
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "array"
+    },
+    "v": {
+      "description": "Record format version.",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "v",
+    "bridge",
+    "disclosure_version",
+    "granted_at",
+    "device_id",
+    "sig"
+  ],
+  "title": "Consent",
+  "type": "object"
+}

@@ -1,0 +1,51 @@
+[workspace]
+
+[package]
+name = "ecosystem-identity"
+version = "0.1.0"
+description = "Shared identity and persona crate for the ecosystem: profile, personas, devices, key envelopes, recovery kit"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/snds/ecosystem-identity"
+rust-version = "1.90"
+readme = "README.md"
+keywords = ["identity", "persona", "recovery", "post-quantum", "ecosystem"]
+categories = ["cryptography", "authentication"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_bytes = "0.11"
+ciborium = "0.2"
+ed25519-dalek = { version = "3.0", default-features = false, features = ["fast", "zeroize"] }
+x25519-dalek = { version = "3.0", default-features = false, features = ["precomputed-tables", "static_secrets", "zeroize"] }
+ml-kem = { version = "0.3", default-features = false, features = ["alloc", "zeroize"] }
+x-wing = { version = "0.1", default-features = false, features = ["zeroize", "getrandom"] }
+chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc", "zeroize"] }
+argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize"] }
+hkdf = "0.13"
+sha2 = { version = "0.11", default-features = false }
+zeroize = { version = "1.9", features = ["derive"] }
+secrecy = "0.10"
+getrandom = "0.3"
+uuid = { version = "1.18", features = ["v4", "serde"] }
+schemars = { version = "1.2", features = ["derive", "uuid1"] }
+thiserror = "2.0"
+serde_json = "1.0"
+
+[target.'cfg(unix)'.dependencies]
+# Peer credentials on the handshake socket (SO_PEERCRED / getpeereid) and the caller's uid.
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = "1.0"
+
+[features]
+# Lowers the Argon2id floor to something a debug-mode test can afford. The
+# crate's own tests turn it on through the self dev-dependency below; never
+# enable it in an app.
+insecure-test-kdf = []
+
+[dev-dependencies.ecosystem-identity]
+path = "."
+features = ["insecure-test-kdf"]
