@@ -1,8 +1,8 @@
 //! The first real transport: a Unix domain socket inside the identity root
 //! (spec §6 step 3, "Unix socket on Linux"). The root is created `0700`, and
 //! the socket file is set to `0600`, so only the same user can connect. Who
-//! that process is comes from `SO_PEERCRED` (Linux) or `getpeereid` (other
-//! Unix) and goes to the verifier.
+//! that process is comes from `SO_PEERCRED` (Linux), or from `getpeereid`
+//! plus `LOCAL_PEERPID` and `proc_pidpath` (macOS), and goes to the verifier.
 
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -15,6 +15,12 @@ use crate::{Error, Result};
 
 /// The socket's file name inside the identity root.
 pub const SOCKET_NAME: &str = "handshake.sock";
+
+/// Names the call that failed, so an `EINVAL` from the kernel says whether
+/// it came from `bind`, `accept`, or a socket option.
+fn at(call: &'static str) -> impl Fn(std::io::Error) -> Error {
+    move |e| Error::Io(std::io::Error::new(e.kind(), format!("{call}: {e}")))
+}
 
 /// The longest socket path we will try to bind. `sun_path` is 104 bytes on
 /// macOS and the BSDs (103 usable) and 108 on Linux; 100 leaves room for the
@@ -89,21 +95,25 @@ impl UnixSocketTransport {
             return Ok(());
         }
         if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).map_err(at("create socket directory"))?;
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+                .map_err(at("chmod socket directory"))?;
         }
         // A socket file left by a crashed app would make bind fail; nobody
         // can be listening on it if connect is refused.
         if self.path.exists() && UnixStream::connect(&self.path).is_err() {
-            std::fs::remove_file(&self.path)?;
+            std::fs::remove_file(&self.path).map_err(at("remove stale socket"))?;
         }
-        let listener = UnixListener::bind(&self.path)?;
+        let listener = UnixListener::bind(&self.path).map_err(at("bind"))?;
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o600))?;
+            std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o600))
+                .map_err(at("chmod socket"))?;
         }
-        listener.set_nonblocking(true)?;
+        listener
+            .set_nonblocking(true)
+            .map_err(at("set listener non-blocking"))?;
         *guard = Some(listener);
         Ok(())
     }
@@ -133,8 +143,12 @@ pub struct UnixChannel {
 
 impl UnixChannel {
     fn new(stream: UnixStream, timeout: Duration) -> Result<Self> {
-        stream.set_read_timeout(Some(timeout))?;
-        stream.set_write_timeout(Some(timeout))?;
+        stream
+            .set_read_timeout(Some(timeout))
+            .map_err(at("set read timeout"))?;
+        stream
+            .set_write_timeout(Some(timeout))
+            .map_err(at("set write timeout"))?;
         let peer = peer_identity(&stream);
         Ok(Self { stream, peer })
     }
@@ -178,7 +192,9 @@ impl PeerTransport for UnixSocketTransport {
             };
             match accepted {
                 Ok((stream, _)) => {
-                    stream.set_nonblocking(false)?;
+                    stream
+                        .set_nonblocking(false)
+                        .map_err(at("set stream blocking"))?;
                     return UnixChannel::new(stream, timeout);
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -187,7 +203,7 @@ impl PeerTransport for UnixSocketTransport {
                     }
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                Err(e) => return Err(Error::Io(e)),
+                Err(e) => return Err(at("accept")(e)),
             }
         }
     }
@@ -199,7 +215,9 @@ impl PeerChannel for UnixChannel {
     }
 
     fn recv(&mut self, timeout: Duration) -> Result<Vec<u8>> {
-        self.stream.set_read_timeout(Some(timeout))?;
+        self.stream
+            .set_read_timeout(Some(timeout))
+            .map_err(at("set read timeout"))?;
         read_frame(&mut self.stream)
     }
 
@@ -241,8 +259,9 @@ fn peer_identity(stream: &UnixStream) -> PeerIdentity {
 }
 
 /// What the kernel says about the process on the other end: user and group
-/// only. macOS also offers `LOCAL_PEERPID`; the audit token the real
-/// verifier needs comes from XPC, not from a plain socket.
+/// from `getpeereid`, and on macOS the process id from `LOCAL_PEERPID` and
+/// its image path from `proc_pidpath`. The audit token the real verifier
+/// needs comes from XPC, not from a plain socket.
 #[cfg(all(unix, not(target_os = "linux")))]
 fn peer_identity(stream: &UnixStream) -> PeerIdentity {
     use std::os::fd::AsRawFd;
@@ -253,12 +272,64 @@ fn peer_identity(stream: &UnixStream) -> PeerIdentity {
     if rc != 0 {
         return PeerIdentity::Unknown;
     }
+    let pid = peer_pid(stream);
     PeerIdentity::Unix {
-        pid: None,
+        pid,
         uid,
         gid,
-        exe: None,
+        exe: pid.and_then(exe_of),
     }
+}
+
+/// The connecting process's id, from the `LOCAL_PEERPID` socket option.
+#[cfg(target_os = "macos")]
+fn peer_pid(stream: &UnixStream) -> Option<i32> {
+    use std::os::fd::AsRawFd;
+    let mut pid: libc::pid_t = 0;
+    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SAFETY: `pid` is a valid, writable `pid_t` and `len` is its size;
+    // getsockopt writes at most `len` bytes into it and updates `len`.
+    let rc = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_LOCAL,
+            libc::LOCAL_PEERPID,
+            (&raw mut pid).cast::<libc::c_void>(),
+            &raw mut len,
+        )
+    };
+    (rc == 0 && pid > 0).then_some(pid)
+}
+
+/// The running image of `pid`, from `proc_pidpath`.
+#[cfg(target_os = "macos")]
+fn exe_of(pid: i32) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    // SAFETY: `buf` is writable for `buf.len()` bytes, which is the size we
+    // pass; proc_pidpath writes at most that many and returns the length.
+    let n = unsafe {
+        libc::proc_pidpath(
+            pid,
+            buf.as_mut_ptr().cast::<libc::c_void>(),
+            buf.len() as u32,
+        )
+    };
+    if n <= 0 {
+        return None;
+    }
+    buf.truncate(n as usize);
+    Some(PathBuf::from(std::ffi::OsString::from_vec(buf)))
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn peer_pid(_stream: &UnixStream) -> Option<i32> {
+    None
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn exe_of(_pid: i32) -> Option<PathBuf> {
+    None
 }
 
 #[cfg(test)]
