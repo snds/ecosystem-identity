@@ -8,6 +8,7 @@
 //! | macOS / iOS | audit token of the connecting process → `SecCode` → signing identity and team against an allow-list ([`CodeSignatureVerifier`], not built yet) |
 //! | Windows | `GetNamedPipeClientProcessId` → open the process → Authenticode signature and, where packaged, the MSIX package family ([`CodeSignatureVerifier`], not built yet) |
 //! | Linux | `SO_PEERCRED` → same user → `/proc/<pid>/exe` → path and binary hash against the installed manifest ([`ProcessIdentityVerifier`], built) |
+//! | macOS, until the code-signature verifier exists | `LOCAL_PEERPID` + `proc_pidpath` → same user → path and binary hash ([`ProcessIdentityVerifier`]; a path check is weaker than a signature check, see below) |
 //! | Android | Binder calling UID → package signature must match the ecosystem signing key (not built yet) |
 //!
 //! Linux is the weakest of the four, which is why the handshake also shows
