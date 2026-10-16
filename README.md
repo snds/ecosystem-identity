@@ -25,10 +25,10 @@ A person remembers **one master password** and keeps **one recovery kit**. Every
 
 ```toml
 [dependencies]
-ecosystem-identity = { git = "https://github.com/snds/ecosystem-identity", tag = "v0.1.0" }
+ecosystem-identity = { git = "https://github.com/snds/ecosystem-identity", rev = "<commit>" }
 ```
 
-Pin a tag or a commit. The format major (`FORMAT = "ecosystem-identity/1"`) is the compatibility promise; readers refuse a higher major with a clear message.
+Pin a commit (or the `v0.1.0` tag once it is on the remote). The format major (`FORMAT = "ecosystem-identity/1"`) is the compatibility promise; readers refuse a higher major with a clear message.
 
 ## Develop
 

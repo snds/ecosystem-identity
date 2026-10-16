@@ -16,6 +16,33 @@ use crate::{Error, Result};
 /// The socket's file name inside the identity root.
 pub const SOCKET_NAME: &str = "handshake.sock";
 
+/// The longest socket path we will try to bind. `sun_path` is 104 bytes on
+/// macOS and the BSDs (103 usable) and 108 on Linux; 100 leaves room for the
+/// terminator on every platform.
+const MAX_SOCKET_PATH: usize = 100;
+
+/// Where the handshake socket for `root` lives: inside the root when that
+/// fits the platform's socket-path limit, otherwise a short, deterministic
+/// path under the user's runtime or temp directory, in a `0700` directory
+/// named after the user, with the file named by a hash of the root.
+pub fn socket_path_for(root: &Path) -> PathBuf {
+    let inside = root.join(SOCKET_NAME);
+    if inside.as_os_str().len() <= MAX_SOCKET_PATH {
+        return inside;
+    }
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(root.as_os_str().as_encoded_bytes());
+    let short: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
+    // SAFETY: getuid has no preconditions and cannot fail.
+    let uid = unsafe { libc::getuid() };
+    let base = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(std::env::temp_dir);
+    base.join(format!("snds-identity-{uid}"))
+        .join(format!("{short}.sock"))
+}
+
 /// A Unix-socket transport at one path. The running app calls `accept`,
 /// which binds the socket on first use; the new app calls `connect`. The
 /// socket file is removed when the listening side is dropped.
@@ -26,10 +53,14 @@ pub struct UnixSocketTransport {
 
 impl UnixSocketTransport {
     /// The transport for the identity at `root`: the socket is
-    /// `<root>/handshake.sock`. Keep the root short enough for a socket
-    /// path (about 100 bytes on most systems).
+    /// `<root>/handshake.sock` (D33). A Unix socket path is limited to about
+    /// 104 bytes on macOS and the BSDs and 108 on Linux, and `bind` fails
+    /// with `EINVAL` or `ENAMETOOLONG` past that. When the root is too deep
+    /// for that, both sides fall back to the same short path derived from
+    /// the root (`socket_path_for`), so a requester and a responder that
+    /// share a root always agree on where to meet.
     pub fn for_root(root: &Path) -> Self {
-        Self::at(&root.join(SOCKET_NAME))
+        Self::at(&socket_path_for(root))
     }
 
     /// A transport at an explicit socket path, for a shell that keeps its
@@ -59,6 +90,8 @@ impl UnixSocketTransport {
         }
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
         }
         // A socket file left by a crashed app would make bind fail; nobody
         // can be listening on it if connect is refused.
@@ -225,5 +258,27 @@ fn peer_identity(stream: &UnixStream) -> PeerIdentity {
         uid,
         gid,
         exe: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_short_root_keeps_the_socket_inside_it() {
+        let root = Path::new("/tmp/id");
+        assert_eq!(socket_path_for(root), root.join(SOCKET_NAME));
+    }
+
+    #[test]
+    fn a_deep_root_gets_the_same_short_path_on_both_sides() {
+        let deep = Path::new("/").join("x".repeat(120));
+        let a = socket_path_for(&deep);
+        let b = socket_path_for(&deep);
+        assert_eq!(a, b);
+        assert!(a.as_os_str().len() <= MAX_SOCKET_PATH, "{a:?}");
+        assert_ne!(a, deep.join(SOCKET_NAME));
+        assert_ne!(a, socket_path_for(&Path::new("/").join("y".repeat(120))));
     }
 }
