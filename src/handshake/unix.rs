@@ -139,6 +139,9 @@ impl Drop for UnixSocketTransport {
 pub struct UnixChannel {
     stream: UnixStream,
     peer: PeerIdentity,
+    /// The read timeout the socket currently has, so `recv` only touches
+    /// the socket option when a step asks for a different one.
+    read_timeout: Duration,
 }
 
 impl UnixChannel {
@@ -150,7 +153,11 @@ impl UnixChannel {
             .set_write_timeout(Some(timeout))
             .map_err(at("set write timeout"))?;
         let peer = peer_identity(&stream);
-        Ok(Self { stream, peer })
+        Ok(Self {
+            stream,
+            peer,
+            read_timeout: timeout,
+        })
     }
 }
 
@@ -215,9 +222,13 @@ impl PeerChannel for UnixChannel {
     }
 
     fn recv(&mut self, timeout: Duration) -> Result<Vec<u8>> {
-        self.stream
-            .set_read_timeout(Some(timeout))
-            .map_err(at("set read timeout"))?;
+        // macOS refuses socket options with EINVAL once the peer has hung
+        // up, which is exactly when a refused requester comes here to read
+        // the refusal. The timeout set when the channel opened still holds,
+        // so the read cannot block for ever; let it report the hang-up.
+        if timeout != self.read_timeout && self.stream.set_read_timeout(Some(timeout)).is_ok() {
+            self.read_timeout = timeout;
+        }
         read_frame(&mut self.stream)
     }
 
