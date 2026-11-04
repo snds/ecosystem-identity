@@ -401,19 +401,27 @@ mod tests {
     fn a_locked_value_is_dropped_while_its_pages_are_still_locked() {
         use std::sync::atomic::AtomicBool;
         static STILL_LOCKED: AtomicBool = AtomicBool::new(false);
-        // Aligned to and as large as the biggest page size in use, so the
-        // probe has its pages to itself.
-        #[repr(C, align(65536))]
-        struct Probe([u8; 64]);
+        // 48 KiB: whatever its alignment, the page holding its middle lies
+        // wholly inside it for any page size up to 16 KiB, so no other
+        // allocation shares that page. (Not an over-aligned type: a stack
+        // value aligned past the page size can skip Windows' guard page.)
+        const LEN: usize = 48 * 1024;
+        struct Probe([u8; LEN]);
+        fn middle_page(bytes: &[u8]) -> usize {
+            (bytes.as_ptr() as usize + bytes.len() / 2) / page_size()
+        }
         impl Drop for Probe {
             fn drop(&mut self) {
-                let page = self.0.as_ptr() as usize / page_size();
-                STILL_LOCKED.store(held(page).is_some(), Ordering::SeqCst);
+                STILL_LOCKED.store(held(middle_page(&self.0)).is_some(), Ordering::SeqCst);
             }
         }
-        let boxed = Locked::new(Probe([9; 64]));
+        if page_size() > 16 * 1024 {
+            return;
+        }
+        let boxed = Locked::new(Probe([9; LEN]));
         assert_eq!(boxed.0[0], 9);
         let locked = boxed.is_locked();
+        assert_eq!(held(middle_page(&boxed.0)).is_some(), locked);
         assert!(format!("{boxed:?}").starts_with("Locked(…"));
         drop(boxed);
         assert_eq!(
@@ -421,8 +429,12 @@ mod tests {
             locked,
             "the value saw its page locked when it was dropped"
         );
-        let refused = refuse::on_this_thread(|| Locked::new(Probe([3; 64])));
+        let refused = refuse::on_this_thread(|| Locked::new(Probe([3; LEN])));
         assert!(!refused.is_locked());
-        assert_eq!(refused.0[63], 3, "a refused lock leaves the value usable");
+        assert_eq!(
+            refused.0[LEN - 1],
+            3,
+            "a refused lock leaves the value usable"
+        );
     }
 }
