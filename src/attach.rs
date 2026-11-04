@@ -18,6 +18,7 @@ use crate::kem::{self, DEFAULT_KEM, KemSecretKey};
 use crate::keys::{self, AppDataKey, CrownJewelKey, Irk, PersonaKey, SymmetricKey};
 use crate::keystore::DeviceKeystore;
 use crate::kit::RecoveryKit;
+use crate::memlock::Locked;
 use crate::records::{
     Consent, Device, EnrolledBy, Id, KeyEnvelope, KeyRef, KeyRefKind, Persona, PersonaKind,
     Profile, Purpose, RECORD_V, Record, RecoveryState, Timestamp,
@@ -77,7 +78,9 @@ pub struct Identity {
     contents: Contents,
     head: Head,
     irk: Irk,
-    isk: SigningKey,
+    // On the heap, on a page locked out of swap; wiped on drop by
+    // `ed25519_dalek` (its `zeroize` feature).
+    isk: Locked<SigningKey>,
     device_id: Id,
     app: String,
 }
@@ -163,7 +166,7 @@ impl Identity {
             contents: Contents::default(),
             head: Head::new(0, [0; 32]),
             irk,
-            isk,
+            isk: Locked::new(isk),
             device_id: keystore.device_id(),
             app: app.to_string(),
         };
@@ -235,7 +238,7 @@ impl Identity {
             contents: loaded.contents,
             head: loaded.head,
             irk,
-            isk,
+            isk: Locked::new(isk),
             device_id: keystore.device_id(),
             app: app.to_string(),
         })))
@@ -396,7 +399,7 @@ impl Identity {
             contents,
             head: Head::new(0, [0; 32]),
             irk,
-            isk,
+            isk: Locked::new(isk),
             device_id: keystore.device_id(),
             app: app.to_string(),
         };
@@ -521,6 +524,12 @@ impl Identity {
     /// This device's id.
     pub fn device_id(&self) -> Id {
         self.device_id
+    }
+
+    /// Whether the root key and the signing key this open identity holds
+    /// are on pages locked out of swap now ([`crate::memlock`]).
+    pub fn keys_locked(&self) -> bool {
+        self.irk.is_locked() && self.isk.is_locked()
     }
 
     /// The app this identity was opened as.
@@ -749,7 +758,7 @@ impl Identity {
             contents: loaded.contents,
             head: loaded.head,
             irk,
-            isk,
+            isk: Locked::new(isk),
             device_id: keystore.device_id(),
             app: app.to_string(),
         };

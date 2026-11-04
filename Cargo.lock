@@ -259,6 +259,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "uuid",
+ "windows-sys",
  "x-wing",
  "x25519-dalek",
  "zeroize",
