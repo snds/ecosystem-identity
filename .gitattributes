@@ -1,0 +1,3 @@
+# The JSON Schema files are a contract other languages read and a test
+# compares byte for byte: the same LF bytes on every checkout, Windows too.
+schema/*.json text eol=lf
