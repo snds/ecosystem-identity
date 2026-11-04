@@ -14,13 +14,26 @@ use zeroize::Zeroizing;
 
 use crate::kdf::{Argon2Params, stretch};
 use crate::keys::{KitKey, SymmetricKey, random_bytes};
+use crate::memlock::PageLock;
 use crate::records::Id;
 use crate::{Error, Result};
 
 /// The Secret Key: 128 random bits. Shown as `A1-` and 26 characters.
-pub struct SecretKey(SecretBox<[u8; 16]>);
+/// Wiped on drop, on a page locked out of swap while it lives.
+pub struct SecretKey(SecretBox<[u8; 16]>, Option<PageLock>);
 
 impl SecretKey {
+    fn new(bytes: [u8; 16]) -> Self {
+        let secret = SecretBox::new(Box::new(bytes));
+        let lock = PageLock::of(secret.expose_secret());
+        Self(secret, lock)
+    }
+
+    /// Whether its page is locked out of swap now.
+    pub fn is_locked(&self) -> bool {
+        self.1.is_some()
+    }
+
     /// The raw bytes, for the Account Unlock Key.
     pub fn expose(&self) -> &[u8; 16] {
         self.0.expose_secret()
@@ -28,7 +41,21 @@ impl SecretKey {
 }
 
 /// The recovery code: 160 random bits. Shown as 8 groups of 4 characters.
-pub struct RecoveryCode(SecretBox<[u8; 20]>);
+/// Wiped on drop, on a page locked out of swap while it lives.
+pub struct RecoveryCode(SecretBox<[u8; 20]>, Option<PageLock>);
+
+impl RecoveryCode {
+    fn new(bytes: [u8; 20]) -> Self {
+        let secret = SecretBox::new(Box::new(bytes));
+        let lock = PageLock::of(secret.expose_secret());
+        Self(secret, lock)
+    }
+
+    /// Whether its page is locked out of swap now.
+    pub fn is_locked(&self) -> bool {
+        self.1.is_some()
+    }
+}
 
 /// The version prefix on a Secret Key, so a later format can be told apart.
 pub const SECRET_KEY_PREFIX: &str = "A1";
@@ -51,8 +78,8 @@ impl RecoveryKit {
         random_bytes(&mut code)?;
         Ok(Self {
             profile_id,
-            secret_key: SecretKey(SecretBox::new(Box::new(sk))),
-            recovery_code: RecoveryCode(SecretBox::new(Box::new(code))),
+            secret_key: SecretKey::new(sk),
+            recovery_code: RecoveryCode::new(code),
         })
     }
 
@@ -75,14 +102,20 @@ impl RecoveryKit {
             .map_err(|_| Error::BadKit("recovery code: wrong length".into()))?;
         Ok(Self {
             profile_id,
-            secret_key: SecretKey(SecretBox::new(Box::new(sk))),
-            recovery_code: RecoveryCode(SecretBox::new(Box::new(code))),
+            secret_key: SecretKey::new(sk),
+            recovery_code: RecoveryCode::new(code),
         })
     }
 
     /// The profile the kit belongs to.
     pub fn profile_id(&self) -> Id {
         self.profile_id
+    }
+
+    /// Whether both the Secret Key's and the recovery code's pages are
+    /// locked out of swap now ([`crate::memlock`]).
+    pub fn is_locked(&self) -> bool {
+        self.secret_key.is_locked() && self.recovery_code.is_locked()
     }
 
     /// The Secret Key.
@@ -213,5 +246,28 @@ mod tests {
         assert!(
             RecoveryKit::from_text(kit.profile_id(), &sk, &format!("{}U", &code[..38])).is_err()
         );
+    }
+
+    #[test]
+    fn the_kit_is_locked_or_counted_and_a_refusal_still_reads() {
+        use crate::memlock::{refuse, report};
+        let before = report().refused;
+        let kit = RecoveryKit::generate(Id::new()).unwrap();
+        if !kit.is_locked() {
+            assert!(report().refused > before);
+        }
+        let refused_before = report().refused;
+        let typed = refuse::on_this_thread(|| {
+            RecoveryKit::from_text(
+                kit.profile_id(),
+                &kit.secret_key_text(),
+                &kit.recovery_code_text(),
+            )
+            .unwrap()
+        });
+        assert!(!typed.is_locked());
+        assert!(report().refused >= refused_before + 2);
+        assert_eq!(typed.secret_key().expose(), kit.secret_key().expose());
+        assert_eq!(typed.recovery_code_text(), kit.recovery_code_text());
     }
 }

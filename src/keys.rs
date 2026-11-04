@@ -2,9 +2,11 @@
 //! key into a [`KeyEnvelope`] (§4).
 //!
 //! Every key is a 256-bit value held in a [`SecretBox`], which zeroises the
-//! memory when it is dropped and never prints its contents. The types differ
-//! only in name, and that is the point: an `AppDataKey` cannot be handed to a
-//! function that wants a `PersonaKey`.
+//! memory when it is dropped and never prints its contents, on a page locked
+//! out of swap while the key lives ([`crate::memlock`]; a refused lock is
+//! counted, never fatal). The types differ only in name, and that is the
+//! point: an `AppDataKey` cannot be handed to a function that wants a
+//! `PersonaKey`.
 
 use std::fmt;
 
@@ -14,6 +16,7 @@ use secrecy::{ExposeSecret, SecretBox};
 use zeroize::Zeroizing;
 
 use crate::kem::{KemPublicKey, KemSecretKey};
+use crate::memlock::PageLock;
 use crate::records::{Aad, Id, KeyEnvelope, KeyRef, Purpose, RECORD_V, Timestamp, WrapAlg};
 use crate::{Error, Result};
 
@@ -44,14 +47,26 @@ pub trait SymmetricKey: Sized {
 macro_rules! key32 {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
-        pub struct $name(SecretBox<[u8; 32]>);
+        // Field order is drop order: the key is wiped, then its page unlocked.
+        pub struct $name(SecretBox<[u8; 32]>, Option<PageLock>);
 
         impl SymmetricKey for $name {
             fn from_bytes(bytes: [u8; 32]) -> Self {
-                Self(SecretBox::new(Box::new(bytes)))
+                let key = SecretBox::new(Box::new(bytes));
+                let lock = PageLock::of(key.expose_secret());
+                Self(key, lock)
             }
             fn expose(&self) -> &[u8; 32] {
                 self.0.expose_secret()
+            }
+        }
+
+        impl $name {
+            /// Whether the key's page is locked out of swap now: `false`
+            /// when the system refused (counted in
+            /// [`crate::memlock::report`]) or this build cannot lock.
+            pub fn is_locked(&self) -> bool {
+                self.1.is_some()
             }
         }
 
@@ -446,5 +461,66 @@ mod tests {
                 Err(Error::Unsupported(_))
             ));
         }
+    }
+
+    /// Every typed key asks for its page to be locked; each is either
+    /// locked or counted as refused.
+    #[test]
+    fn every_key_type_is_locked_or_counted() {
+        use crate::memlock::report;
+        let before = report();
+        let locked = [
+            Irk::generate().unwrap().is_locked(),
+            PersonaKey::generate().unwrap().is_locked(),
+            AppDataKey::generate().unwrap().is_locked(),
+            CrownJewelKey::generate().unwrap().is_locked(),
+            DeviceUnlockKey::generate().unwrap().is_locked(),
+            AccountUnlockKey::generate().unwrap().is_locked(),
+            KitKey::generate().unwrap().is_locked(),
+            PeerWrapKey::generate().unwrap().is_locked(),
+        ];
+        let refused = locked.iter().filter(|l| !**l).count() as u64;
+        let after = report();
+        assert!(after.supported);
+        assert!(
+            after.refused >= before.refused + refused,
+            "every key that isn't locked was counted as refused: {before:?} → {after:?}"
+        );
+        // A clone is a new allocation with its own lock.
+        let irk = Irk::generate().unwrap();
+        let copy = irk.clone();
+        assert_eq!(copy.expose(), irk.expose());
+        assert_ne!(
+            copy.expose().as_ptr(),
+            irk.expose().as_ptr(),
+            "a clone has its own memory"
+        );
+    }
+
+    /// A refused lock is never fatal: the key is made, wraps, unwraps and
+    /// is counted.
+    #[test]
+    fn a_refused_lock_leaves_every_key_working_and_is_counted() {
+        use crate::memlock::{refuse, report};
+        let before = report().refused;
+        let (irk, dev) = refuse::on_this_thread(|| {
+            (
+                Irk::generate().unwrap(),
+                DeviceUnlockKey::generate().unwrap(),
+            )
+        });
+        assert!(!irk.is_locked() && !dev.is_locked());
+        assert!(report().refused >= before + 2);
+        let place = aad(Id::new(), None, Id::new(), Purpose::Irk);
+        let env = wrap(
+            irk.expose(),
+            &dev,
+            KeyRef::new(KeyRefKind::Device, Id::new()),
+            &place,
+        )
+        .unwrap();
+        let back: Irk = refuse::on_this_thread(|| unwrap_key(&env, &dev, &place).unwrap());
+        assert_eq!(back.expose(), irk.expose());
+        assert!(!back.is_locked());
     }
 }

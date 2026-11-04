@@ -33,8 +33,26 @@ thiserror = "2.0"
 serde_json = "1.0"
 
 [target.'cfg(unix)'.dependencies]
-# Peer credentials on the handshake socket (SO_PEERCRED / getpeereid) and the caller's uid.
+# Peer credentials on the handshake socket (SO_PEERCRED / getpeereid), the
+# caller's uid, and mlock for the key types (memlock).
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# Raw Win32 for the handshake's named pipe (overlapped I/O, the client's
+# process id, its token's user and image path, the pipe's DACL in SDDL) and
+# for VirtualLock under the key types (memlock). The same 0.61 line
+# tempfile already brings into the lock file; MIT OR Apache-2.0.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 tempfile = "3"

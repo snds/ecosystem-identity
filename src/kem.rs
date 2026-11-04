@@ -16,6 +16,7 @@ use x_wing::{Decapsulate, Decapsulator, Encapsulate, KeyExport};
 
 use crate::kdf::hkdf_sha512;
 use crate::keys::{random_32, random_bytes};
+use crate::memlock::PageLock;
 use crate::{Error, Result};
 
 /// Which key-encapsulation scheme a receiving key uses.
@@ -43,24 +44,32 @@ pub struct KemPublicKey {
     pub bytes: Vec<u8>,
 }
 
-/// A receiving key's private half: the seed it was expanded from.
+/// A receiving key's private half: the seed it was expanded from, wiped on
+/// drop and on a page locked out of swap while it lives
+/// ([`crate::memlock`]).
 pub struct KemSecretKey {
     alg: KemAlg,
+    // Field order is drop order: the seed is wiped, then its page unlocked.
     seed: SecretBox<[u8; 32]>,
+    lock: Option<PageLock>,
 }
 
 impl KemSecretKey {
     /// Rebuilds the private half from its seed.
     pub fn from_seed(alg: KemAlg, seed: [u8; 32]) -> Self {
-        Self {
-            alg,
-            seed: SecretBox::new(Box::new(seed)),
-        }
+        let seed = SecretBox::new(Box::new(seed));
+        let lock = PageLock::of(seed.expose_secret());
+        Self { alg, seed, lock }
     }
 
     /// The scheme.
     pub fn alg(&self) -> KemAlg {
         self.alg
+    }
+
+    /// Whether the seed's page is locked out of swap now.
+    pub fn is_locked(&self) -> bool {
+        self.lock.is_some()
     }
 
     /// The seed, for re-deriving the public half. Use it at once.
@@ -75,10 +84,22 @@ impl fmt::Debug for KemSecretKey {
     }
 }
 
-/// The 256-bit secret both sides end up with.
-pub struct SharedSecret(SecretBox<[u8; 32]>);
+/// The 256-bit secret both sides end up with, wiped on drop and on a page
+/// locked out of swap while it lives.
+pub struct SharedSecret(SecretBox<[u8; 32]>, Option<PageLock>);
 
 impl SharedSecret {
+    fn new(bytes: [u8; 32]) -> Self {
+        let secret = SecretBox::new(Box::new(bytes));
+        let lock = PageLock::of(secret.expose_secret());
+        Self(secret, lock)
+    }
+
+    /// Whether the secret's page is locked out of swap now.
+    pub fn is_locked(&self) -> bool {
+        self.1.is_some()
+    }
+
     /// The raw bytes. Feed them to a KDF; never use them as a key directly.
     pub fn expose(&self) -> &[u8; 32] {
         self.0.expose_secret()
@@ -144,7 +165,7 @@ fn x25519_shared(
     info.extend_from_slice(recipient_pub);
     let mut out = [0u8; 32];
     hkdf_sha512(dh, None, &info, &mut out)?;
-    Ok(SharedSecret(SecretBox::new(Box::new(out))))
+    Ok(SharedSecret::new(out))
 }
 
 impl Kem for X25519Kem {
@@ -229,10 +250,7 @@ impl Kem for HybridKem {
         let ek = x_wing::EncapsulationKey::try_from(public.bytes.as_slice())
             .map_err(|_| Error::Invalid("the hybrid public key didn't parse".into()))?;
         let (ct, ss) = ek.encapsulate();
-        Ok((
-            ct.to_vec(),
-            SharedSecret(SecretBox::new(Box::new(ss.into()))),
-        ))
+        Ok((ct.to_vec(), SharedSecret::new(ss.into())))
     }
 
     fn decapsulate(&self, secret: &KemSecretKey, ciphertext: &[u8]) -> Result<SharedSecret> {
@@ -241,7 +259,7 @@ impl Kem for HybridKem {
         let ss = dk
             .decapsulate_slice(ciphertext)
             .map_err(|_| Error::Invalid("a hybrid ciphertext is 1120 bytes".into()))?;
-        Ok(SharedSecret(SecretBox::new(Box::new(ss.into()))))
+        Ok(SharedSecret::new(ss.into()))
     }
 }
 
@@ -269,5 +287,30 @@ mod tests {
             generate(KemAlg::X25519MlKem768).unwrap().1.bytes.len(),
             x_wing::ENCAPSULATION_KEY_SIZE
         );
+    }
+
+    #[test]
+    fn the_seed_and_the_shared_secret_are_locked_or_counted_and_a_refusal_still_works() {
+        use crate::memlock::{refuse, report};
+        for alg in [KemAlg::X25519, KemAlg::X25519MlKem768] {
+            let before = report().refused;
+            let (sk, pk) = generate(alg).unwrap();
+            let (ct, ss) = kem(alg).encapsulate(&pk).unwrap();
+            let unlocked = [sk.is_locked(), ss.is_locked()]
+                .iter()
+                .filter(|l| !**l)
+                .count() as u64;
+            assert!(report().refused >= before + unlocked, "{alg:?}");
+
+            let refused_before = report().refused;
+            let (sk2, ss2) = refuse::on_this_thread(|| {
+                let sk2 = KemSecretKey::from_seed(alg, *sk.seed());
+                let ss2 = kem(alg).decapsulate(&sk2, &ct).unwrap();
+                (sk2, ss2)
+            });
+            assert!(!sk2.is_locked() && !ss2.is_locked());
+            assert!(report().refused >= refused_before + 2);
+            assert_eq!(ss2.expose(), ss.expose(), "{alg:?}: works unlocked");
+        }
     }
 }

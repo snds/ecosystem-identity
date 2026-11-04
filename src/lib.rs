@@ -14,6 +14,8 @@
 //! - [`handshake`] — the local handshake: a second app on the same device
 //!   gets the identity from the running one (§6 step 3)
 //! - [`kit`] — the recovery kit's text and the key it rebuilds
+//! - [`memlock`] — the key types' pages locked out of swap, and the count
+//!   of locks the system refused ([`memlock::report`])
 //! - [`keystore`] — the device's own keys, behind [`DeviceKeystore`]
 //! - [`auth`] — account login, behind [`AccountAuth`] (OPAQUE later; a local stub now)
 //! - [`schema`] — JSON Schema for every record
@@ -31,6 +33,7 @@ pub mod kem;
 pub mod keys;
 pub mod keystore;
 pub mod kit;
+pub mod memlock;
 pub mod records;
 pub mod schema;
 pub mod store;
@@ -49,6 +52,7 @@ pub use kem::{KemAlg, KemPublicKey};
 pub use keys::{AppDataKey, CrownJewelKey, Irk, PersonaKey, SymmetricKey};
 pub use keystore::{DeviceKeystore, FileKeystore};
 pub use kit::RecoveryKit;
+pub use memlock::MemoryReport;
 pub use records::{
     Consent, Device, Id, KeyEnvelope, KeyRef, KeyRefKind, Manifest, Persona, PersonaKind, Platform,
     Profile, Purpose, Record, RecoveryState, Timestamp,

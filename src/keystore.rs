@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::kem::{self, DEFAULT_KEM, KemAlg, KemPublicKey, KemSecretKey};
 use crate::keys::{DeviceUnlockKey, SymmetricKey, random_32};
+use crate::memlock::Locked;
 use crate::records::{Id, Platform, Timestamp};
 use crate::{Error, Result};
 
@@ -77,14 +78,27 @@ struct DeviceKeyFile {
     created_at: Timestamp,
 }
 
+impl Drop for DeviceKeyFile {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.unlock_key.zeroize();
+        self.signing_seed.zeroize();
+        self.kem_seed.zeroize();
+    }
+}
+
 /// A keystore kept in one file, readable only by the user (mode 0600 where
 /// the platform has modes). It is as safe as the user's home directory: good
 /// enough for Linux, CI, and a first desktop build; not a substitute for
 /// hardware on a phone. The file never leaves the device and is not part of
 /// the identity store.
+///
+/// In memory the three seeds sit on the heap, on a page locked out of swap
+/// while the keystore is open ([`crate::memlock`]), and are wiped when it
+/// is dropped.
 pub struct FileKeystore {
     path: PathBuf,
-    keys: DeviceKeyFile,
+    keys: Locked<DeviceKeyFile>,
     platform: Platform,
 }
 
@@ -92,7 +106,7 @@ impl FileKeystore {
     /// Opens the keystore file, or creates it with fresh keys.
     pub fn open_or_create(path: &Path) -> Result<Self> {
         let keys = if path.exists() {
-            let bytes = std::fs::read(path)?;
+            let bytes = zeroize::Zeroizing::new(std::fs::read(path)?);
             let keys: DeviceKeyFile = crate::cbor::from_slice(&bytes)?;
             if keys.v != DEVICE_KEY_V {
                 return Err(Error::Keystore(format!(
@@ -114,12 +128,13 @@ impl FileKeystore {
             if let Some(dir) = path.parent() {
                 std::fs::create_dir_all(dir)?;
             }
-            crate::store::write_private(path, &crate::cbor::to_canonical(&keys)?)?;
+            let bytes = zeroize::Zeroizing::new(crate::cbor::to_canonical(&keys)?);
+            crate::store::write_private(path, &bytes)?;
             keys
         };
         Ok(Self {
             path: path.to_path_buf(),
-            keys,
+            keys: Locked::new(keys),
             platform: Platform::current(),
         })
     }
@@ -127,6 +142,11 @@ impl FileKeystore {
     /// Where the file lives.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Whether the seeds' pages are locked out of swap now.
+    pub fn is_locked(&self) -> bool {
+        self.keys.is_locked()
     }
 
     fn signing_key(&self) -> SigningKey {
