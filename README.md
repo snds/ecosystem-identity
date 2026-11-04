@@ -44,7 +44,7 @@ Tests run with the `insecure-test-kdf` feature through the crate's self dev-depe
 
 ## Provenance
 
-Built first inside [`snds/Mailbird`](https://github.com/snds/Mailbird) (`crates/identity`, PRs #44 and #46, ADR-0049 and ADR-0050) per Lockdown decision D12, and extracted here on 2026-10-16. The two ADRs are carried in `docs/decisions/`.
+Built first inside [`snds/Mailbird`](https://github.com/snds/Mailbird) (`crates/identity`, PRs #44 and #46, ADR-0049 and ADR-0050) per Lockdown decision D12, and extracted here on 2026-10-16. The two ADRs are carried in `docs/decisions/` as 0001 and 0002; 0003 is the Windows handshake and the locked key types.
 
 ## Licence
 
