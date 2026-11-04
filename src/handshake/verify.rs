@@ -7,6 +7,7 @@
 //! |---|---|
 //! | macOS / iOS | audit token of the connecting process → `SecCode` → signing identity and team against an allow-list ([`CodeSignatureVerifier`], not built yet) |
 //! | Windows | `GetNamedPipeClientProcessId` → open the process → Authenticode signature and, where packaged, the MSIX package family ([`CodeSignatureVerifier`], not built yet) |
+//! | Windows, until the code-signature verifier exists | `GetNamedPipeClientProcessId` → the process held open → its token's user SID must be ours → `QueryFullProcessImageNameW` → path and binary hash ([`ProcessIdentityVerifier`], built) |
 //! | Linux | `SO_PEERCRED` → same user → `/proc/<pid>/exe` → path and binary hash against the installed manifest ([`ProcessIdentityVerifier`], built) |
 //! | macOS, until the code-signature verifier exists | `LOCAL_PEERPID` + `proc_pidpath` → same user → path and binary hash ([`ProcessIdentityVerifier`]; a path check is weaker than a signature check, see below) |
 //! | Android | Binder calling UID → package signature must match the ecosystem signing key (not built yet) |
@@ -155,16 +156,28 @@ pub struct AllowedBinary {
     pub sha256: Option<[u8; 32]>,
 }
 
-/// Process-identity verification for Linux (03-architecture §7): the peer
-/// must run as the same user, and its executable (read through
-/// `/proc/<pid>/exe`, which names the running image even after an upgrade
-/// replaces the file) must be one of the allowed binaries by path and, when
-/// a hash is given, by content. The hash is read through the same `/proc`
-/// link, so it covers the image that is running.
+/// Process-identity verification (03-architecture §7): the peer must run
+/// as the same user, and its executable must be one of the allowed binaries
+/// by path and, when a hash is given, by content.
 ///
-/// On other platforms it refuses every peer: Apple and Windows use
-/// [`CodeSignatureVerifier`]; Android checks the calling UID's package
-/// signature in the shell.
+/// - **Linux**: same uid from `SO_PEERCRED`; the executable through
+///   `/proc/<pid>/exe`, which names the running image even after an upgrade
+///   replaces the file, and the hash read through the same link, so it
+///   covers the image that is running.
+/// - **macOS**: same uid from `getpeereid`; the image path from
+///   `proc_pidpath`, hashed at that path.
+/// - **Windows**: the token's user SID must equal this process's; the
+///   image path from `QueryFullProcessImageNameW`, hashed at that path,
+///   compared without regard to case. The pipe holds the process open, so
+///   its id is not reused while it is checked; Windows also refuses to
+///   overwrite or delete a running image.
+///
+/// The refusals are the same everywhere: another user, an executable that
+/// couldn't be read, one that isn't an allowed binary, one that couldn't be
+/// hashed, and one whose hash differs. A peer the transport couldn't name
+/// is refused too. On Apple and Windows the stronger check is
+/// [`CodeSignatureVerifier`] once it is built; Android checks the calling
+/// UID's package signature in the shell.
 #[derive(Clone, Debug, Default)]
 pub struct ProcessIdentityVerifier {
     allowed: Vec<AllowedBinary>,
@@ -187,29 +200,14 @@ impl ProcessIdentityVerifier {
     }
 }
 
-impl PeerVerifier for ProcessIdentityVerifier {
-    fn verify(&self, peer: &PeerIdentity) -> Result<TrustedPeer> {
-        let PeerIdentity::Unix { pid, uid, exe, .. } = peer else {
-            return Err(Error::PeerUntrusted(
-                "the channel didn't say which process is on the other end".into(),
-            ));
-        };
-        if *uid != current_uid()? {
-            return Err(Error::PeerUntrusted(
-                "the app on the other end runs as another user".into(),
-            ));
-        }
-        let Some(exe) = exe else {
-            return Err(Error::PeerUntrusted(
-                "the other app's executable couldn't be read".into(),
-            ));
-        };
-        let exe = exe.canonicalize().unwrap_or_else(|_| exe.clone());
+impl ProcessIdentityVerifier {
+    /// The allowed binary at `exe`, checked by hash (read at `image`) when
+    /// the allow-list carries one. `exe` has already passed the user check.
+    fn check_binary(&self, exe: &Path, image: &Path) -> Result<TrustedPeer> {
+        let exe = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
         let Some(allowed) = self.allowed.iter().find(|a| {
-            a.path
-                .canonicalize()
-                .map(|p| p == exe)
-                .unwrap_or(a.path == exe)
+            let want = a.path.canonicalize().unwrap_or_else(|_| a.path.clone());
+            same_path(&want, &exe)
         }) else {
             return Err(Error::PeerUntrusted(format!(
                 "{} isn't an installed ecosystem app",
@@ -217,11 +215,7 @@ impl PeerVerifier for ProcessIdentityVerifier {
             )));
         };
         if let Some(want) = allowed.sha256 {
-            let image = match pid {
-                Some(pid) if cfg!(target_os = "linux") => PathBuf::from(format!("/proc/{pid}/exe")),
-                _ => exe.clone(),
-            };
-            let have = Self::hash_of(&image).map_err(|_| {
+            let have = Self::hash_of(image).map_err(|_| {
                 Error::PeerUntrusted("the other app's executable couldn't be hashed".into())
             })?;
             if have != want {
@@ -237,6 +231,60 @@ impl PeerVerifier for ProcessIdentityVerifier {
     }
 }
 
+fn another_user() -> Error {
+    Error::PeerUntrusted("the app on the other end runs as another user".into())
+}
+
+fn unreadable_executable() -> Error {
+    Error::PeerUntrusted("the other app's executable couldn't be read".into())
+}
+
+impl PeerVerifier for ProcessIdentityVerifier {
+    fn verify(&self, peer: &PeerIdentity) -> Result<TrustedPeer> {
+        match peer {
+            PeerIdentity::Unix { pid, uid, exe, .. } => {
+                if *uid != current_uid()? {
+                    return Err(another_user());
+                }
+                let Some(exe) = exe else {
+                    return Err(unreadable_executable());
+                };
+                let image = match pid {
+                    Some(pid) if cfg!(target_os = "linux") => {
+                        PathBuf::from(format!("/proc/{pid}/exe"))
+                    }
+                    _ => exe.clone(),
+                };
+                self.check_binary(exe, &image)
+            }
+            PeerIdentity::Windows { sid, exe, .. } => {
+                let mine = current_sid()?;
+                if sid.as_deref() != Some(mine.as_str()) {
+                    return Err(another_user());
+                }
+                let Some(exe) = exe else {
+                    return Err(unreadable_executable());
+                };
+                self.check_binary(exe, exe)
+            }
+            _ => Err(Error::PeerUntrusted(
+                "the channel didn't say which process is on the other end".into(),
+            )),
+        }
+    }
+}
+
+/// Whether two canonical paths name the same file. Windows paths compare
+/// without regard to case (NTFS's default); elsewhere byte for byte.
+fn same_path(a: &Path, b: &Path) -> bool {
+    if cfg!(windows) {
+        a.as_os_str().to_string_lossy().to_lowercase()
+            == b.as_os_str().to_string_lossy().to_lowercase()
+    } else {
+        a == b
+    }
+}
+
 #[cfg(unix)]
 fn current_uid() -> Result<u32> {
     // SAFETY: getuid takes no arguments, cannot fail, and touches no memory.
@@ -246,7 +294,20 @@ fn current_uid() -> Result<u32> {
 #[cfg(not(unix))]
 fn current_uid() -> Result<u32> {
     Err(Error::PeerUntrusted(
-        "process identity isn't available on this platform".into(),
+        "a Unix peer can only be checked on Unix".into(),
+    ))
+}
+
+#[cfg(windows)]
+fn current_sid() -> Result<String> {
+    super::windows::current_user_sid()
+        .ok_or_else(|| Error::PeerUntrusted("this app's own user couldn't be read".into()))
+}
+
+#[cfg(not(windows))]
+fn current_sid() -> Result<String> {
+    Err(Error::PeerUntrusted(
+        "a Windows peer can only be checked on Windows".into(),
     ))
 }
 
@@ -320,6 +381,88 @@ mod tests {
         assert!(matches!(
             wrong_hash.verify(&me),
             Err(Error::PeerUntrusted(_))
+        ));
+    }
+
+    #[test]
+    fn a_windows_peer_from_another_user_or_without_a_name_is_refused() {
+        let exe = std::env::current_exe().unwrap();
+        let v = ProcessIdentityVerifier::new(vec![AllowedBinary {
+            app: "test".into(),
+            path: exe.clone(),
+            sha256: None,
+        }]);
+        // Not this process's user (and on Unix, not checkable at all).
+        for sid in [None, Some("S-1-5-21-0-0-0-1001".to_string())] {
+            assert!(
+                matches!(
+                    v.verify(&PeerIdentity::Windows {
+                        pid: 4,
+                        sid,
+                        exe: Some(exe.clone()),
+                    }),
+                    Err(Error::PeerUntrusted(_))
+                ),
+                "a peer of another user is refused"
+            );
+        }
+        assert!(matches!(
+            v.verify(&PeerIdentity::Unknown),
+            Err(Error::PeerUntrusted(m)) if m.contains("didn't say which process")
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn process_identity_on_windows_checks_user_path_case_and_hash() {
+        let exe = std::env::current_exe().unwrap();
+        let sid = current_sid().unwrap();
+        let me = |exe: Option<PathBuf>, sid: Option<String>| PeerIdentity::Windows {
+            pid: std::process::id(),
+            sid,
+            exe,
+        };
+        let hash = ProcessIdentityVerifier::hash_of(&exe).unwrap();
+        let shouted = PathBuf::from(exe.to_string_lossy().to_uppercase());
+        let good = ProcessIdentityVerifier::new(vec![AllowedBinary {
+            app: "test".into(),
+            path: shouted,
+            sha256: Some(hash),
+        }]);
+        assert_eq!(
+            good.verify(&me(Some(exe.clone()), Some(sid.clone())))
+                .unwrap()
+                .app,
+            "test",
+            "paths compare without case"
+        );
+        for (peer, why) in [
+            (
+                me(Some(exe.clone()), Some("S-1-5-18".into())),
+                "another user",
+            ),
+            (me(None, Some(sid.clone())), "couldn't be read"),
+            (
+                me(
+                    Some(exe.with_file_name("not-an-app.exe")),
+                    Some(sid.clone()),
+                ),
+                "isn't an installed",
+            ),
+        ] {
+            match good.verify(&peer) {
+                Err(Error::PeerUntrusted(m)) => assert!(m.contains(why), "{m}"),
+                other => panic!("{peer:?} was not refused: {other:?}"),
+            }
+        }
+        let wrong_hash = ProcessIdentityVerifier::new(vec![AllowedBinary {
+            app: "test".into(),
+            path: exe.clone(),
+            sha256: Some([0; 32]),
+        }]);
+        assert!(matches!(
+            wrong_hash.verify(&me(Some(exe), Some(sid))),
+            Err(Error::PeerUntrusted(m)) if m.contains("isn't the binary")
         ));
     }
 }

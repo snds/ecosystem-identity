@@ -15,9 +15,10 @@
 //!   opens the envelope with its device's receiving key, writes its own
 //!   `device` wrap, and attaches.
 //!
-//! Transports: [`channel::ChannelTransport`] in memory (tests, one process)
-//! and [`unix::UnixSocketTransport`] (Linux, macOS until XPC lands). What
-//! the wire carries is in [`wire`]; who may connect is in [`verify`].
+//! Transports: [`channel::ChannelTransport`] in memory (tests, one process),
+//! `unix::UnixSocketTransport` (Linux, macOS until XPC lands) and
+//! `windows::NamedPipeTransport` (Windows). What the wire carries is in
+//! [`wire`]; who may connect is in [`verify`].
 //!
 //! Guarantees: one request per connection; every step has a timeout; a
 //! request nonce is accepted once; the person's "no" writes nothing; the
@@ -29,6 +30,8 @@ pub mod channel;
 #[cfg(unix)]
 pub mod unix;
 pub mod verify;
+#[cfg(windows)]
+pub mod windows;
 pub mod wire;
 
 use std::collections::{HashSet, VecDeque};
@@ -77,6 +80,19 @@ pub enum PeerIdentity {
         /// Its group id.
         gid: u32,
         /// Its executable, where the platform lets us read it.
+        exe: Option<PathBuf>,
+    },
+    /// A Windows peer, from the named pipe: `GetNamedPipeClientProcessId`
+    /// (or `GetNamedPipeServerProcessId` on the client side), with the
+    /// process held open for the channel's life.
+    Windows {
+        /// Its process id.
+        pid: u32,
+        /// Its token's user, as a string SID (`S-1-5-21-…`), when the
+        /// token could be read.
+        sid: Option<String>,
+        /// Its image path (`QueryFullProcessImageNameW`), when it could be
+        /// read.
         exe: Option<PathBuf>,
     },
     /// The transport could not say.

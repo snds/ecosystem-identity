@@ -1,6 +1,7 @@
 //! The local handshake (spec §6 step 3) end to end: create on app A,
-//! hand over to app B on the same device over the in-memory transport and
-//! over a Unix socket, and the refusals (untrusted peer, declined, replay).
+//! hand over to app B on the same device over the in-memory transport, a
+//! Unix socket and a Windows named pipe, and the refusals (untrusted peer,
+//! declined, replay).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -510,6 +511,92 @@ fn unix_socket_handshake_end_to_end() {
 
     // A requester that never comes times out the responder.
     let quiet = UnixSocketTransport::for_root(&bench_c.root);
+    let mut responder = Responder::new(
+        &AllowAll,
+        &confirm,
+        HandshakeOptions {
+            timeout: Duration::from_millis(200),
+            confirm_timeout: Duration::from_millis(200),
+        },
+    );
+    assert!(matches!(
+        responder.serve_one(&mut c_id, &quiet),
+        Err(Error::Timeout)
+    ));
+}
+
+#[cfg(windows)]
+#[test]
+fn named_pipe_handshake_end_to_end() {
+    use ecosystem_identity::handshake::verify::{AllowedBinary, ProcessIdentityVerifier};
+    use ecosystem_identity::handshake::windows::{NamedPipeTransport, pipe_name_for};
+
+    let bench = new_bench();
+    let mut a_id = Identity::create(&bench.root, APP_A, "Laptop (Mailbird)", &bench.a).unwrap();
+    let personal = a_id.personas().next().unwrap().persona_id;
+    let adk = AppDataKey::generate().unwrap();
+    let key_id = a_id.wrap_app_key(personal, APP_A, &adk).unwrap();
+    let head_before = a_id.head();
+
+    // Both sides check the peer by process identity: same user, this very
+    // binary, by path and hash, read from the pipe's process id.
+    let exe = std::env::current_exe().unwrap();
+    let verifier = ProcessIdentityVerifier::new(vec![AllowedBinary {
+        app: "allow-all".into(),
+        path: exe.clone(),
+        sha256: Some(ProcessIdentityVerifier::hash_of(&exe).unwrap()),
+    }]);
+
+    let transport = NamedPipeTransport::for_root(&bench.root);
+    assert_eq!(transport.name(), pipe_name_for(&bench.root));
+    transport.listen().unwrap();
+
+    let confirm = AutoConfirm::new();
+    let (served, requested, shown) = run_handshake(
+        &bench, &mut a_id, &transport, &verifier, &verifier, &confirm,
+    );
+    assert_enrolled(
+        &bench,
+        &mut a_id,
+        head_before,
+        served,
+        requested,
+        shown,
+        &confirm,
+        personal,
+        key_id,
+        &adk,
+    );
+
+    // A peer that is not an installed binary is refused over the pipe too,
+    // on both sides, and nothing is written.
+    let strict = ProcessIdentityVerifier::new(vec![AllowedBinary {
+        app: "other".into(),
+        path: exe.with_file_name("other-app.exe"),
+        sha256: None,
+    }]);
+    let bench_c = new_bench();
+    let mut c_id = Identity::create(&bench_c.root, APP_A, "Laptop", &bench_c.a).unwrap();
+    let c_head = c_id.head();
+    let transport_c = NamedPipeTransport::for_root(&bench_c.root);
+    transport_c.listen().unwrap();
+    let (served, requested, _) = run_handshake(
+        &bench_c,
+        &mut c_id,
+        &transport_c,
+        &strict,
+        &verifier,
+        &confirm,
+    );
+    assert!(matches!(served, Err(Error::PeerUntrusted(_))), "{served:?}");
+    assert!(
+        matches!(requested, Err(Error::PeerUntrusted(_))),
+        "{requested:?}"
+    );
+    assert_eq!(c_id.head(), c_head, "nothing was written");
+
+    // A requester that never comes times out the responder.
+    let quiet = NamedPipeTransport::for_root(&new_bench().root);
     let mut responder = Responder::new(
         &AllowAll,
         &confirm,

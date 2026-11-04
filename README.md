@@ -17,7 +17,7 @@ A person remembers **one master password** and keeps **one recovery kit**. Every
 | `store` | The on-disk layout with a signed, hash-chained manifest; rollback and tamper detection |
 | `attach` | `create`, `attach`, `open_or_create`, `recover_with_kit`, `recover_with_account`, personas, app keys, `adopt` |
 | `kit` | Recovery kit: Secret Key + recovery code, Crockford base32 |
-| `handshake` | Same-device enrolment between two ecosystem apps: transport and verifier traits, commit-then-reveal, six-digit code, Unix-socket transport |
+| `handshake` | Same-device enrolment between two ecosystem apps: transport and verifier traits, commit-then-reveal, six-digit code, Unix-socket transport (Linux, macOS) and named-pipe transport (Windows), peer checked by process identity on all three |
 | `memlock` | Every secret key type on pages locked out of swap (`mlock` / `VirtualLock`), counted per page; refusals counted in `memlock::report()`, never fatal |
 | `auth`, `keystore` | OPAQUE and platform-keystore traits; file keystore for desktop and CI; hardware backends declared |
 | `schema/` | JSON Schema for every record; a test fails when stale |
